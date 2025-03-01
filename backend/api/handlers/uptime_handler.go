@@ -1,18 +1,15 @@
-package main
+package handlers
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -26,134 +23,123 @@ const (
 	CheckTypeCertificate UptimeCheckType = "certificate"
 )
 
-// UptimeCheckConfig, servis izleme yapılandırması
+// UptimeCheckConfig, test yapılandırması
 type UptimeCheckConfig struct {
-	ServiceID     int
-	Name          string
-	Namespace     string
-	Cluster       string
-	Endpoint      string
-	CheckType     UptimeCheckType
-	CheckInterval int // saniye cinsinden
-	Timeout       time.Duration
-
-	// HTTP kontrolü için ek alanlar
+	Endpoint           string
+	CheckType          UptimeCheckType
+	Timeout            time.Duration
 	ExpectedStatusCode int
 	ExpectedContent    string
-	Headers            map[string]string
 	Username           string
 	Password           string
-
-	// SSL kontrolü için
-	SSLCheck       bool
-	SSLWarningDays int  // Sertifika son kullanma uyarısı - kaç gün öncesinden
-	InsecureSkip   bool // TLS doğrulamasını atla
+	Headers            map[string]string
+	SSLCheck           bool
+	SSLWarningDays     int
+	InsecureSkip       bool
 }
 
-// UptimeCheckResult, tek bir kontrol sonucunu temsil eder
+// UptimeCheckResult, test sonucu
 type UptimeCheckResult struct {
-	ServiceID    int
-	Status       string
-	ResponseTime int64 // milisaniye
-	ErrorMessage string
-	Timestamp    time.Time
+	Status       string `json:"status"`
+	ResponseTime int64  `json:"responseTime,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	Timestamp    string `json:"timestamp"`
 }
 
-// UptimeMonitor, tüm izleme işlemlerini yönetir
-type UptimeMonitor struct {
-	db          *sql.DB
-	configs     []UptimeCheckConfig
-	cancelFuncs []context.CancelFunc
-	configMutex sync.RWMutex
-}
+// HandleUptimeTest, uptime test endpoint'i için handler
+func HandleUptimeTest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 
-// NewUptimeMonitor, yeni bir izleme örneği oluşturur
-func NewUptimeMonitor(db *sql.DB) *UptimeMonitor {
-	return &UptimeMonitor{
-		db:          db,
-		configs:     []UptimeCheckConfig{},
-		cancelFuncs: []context.CancelFunc{},
-	}
-}
+	// CORS ayarları - geliştirme sırasında yararlı olabilir
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-// loadServiceConfigs, veritabanından izlenecek servisleri yükler
-func (m *UptimeMonitor) loadServiceConfigs() error {
-	rows, err := m.db.Query(`
-		SELECT id, name, namespace, cluster, endpoint, 
-		       COALESCE(check_interval, 60) as check_interval 
-		FROM services 
-		WHERE endpoint IS NOT NULL AND endpoint != ''
-	`)
-	if err != nil {
-		return fmt.Errorf("servis yapılandırmaları yüklenemedi: %v", err)
-	}
-	defer rows.Close()
-
-	m.configMutex.Lock()
-	defer m.configMutex.Unlock()
-	m.configs = []UptimeCheckConfig{}
-
-	for rows.Next() {
-		var config UptimeCheckConfig
-		var endpoint string
-
-		err := rows.Scan(
-			&config.ServiceID,
-			&config.Name,
-			&config.Namespace,
-			&config.Cluster,
-			&endpoint,
-			&config.CheckInterval,
-		)
-		if err != nil {
-			log.Printf("Servis yapılandırması okunurken hata: %v", err)
-			continue
-		}
-
-		// Endpoint türünü belirle
-		if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-			config.CheckType = CheckTypeHTTP
-		} else if strings.Contains(endpoint, ":") {
-			config.CheckType = CheckTypeTCP
-		} else {
-			config.CheckType = CheckTypeDNS
-		}
-
-		config.Endpoint = endpoint
-		config.Timeout = 10 * time.Second
-		config.SSLWarningDays = 30 // Varsayılan olarak 30 gün
-		config.Headers = make(map[string]string)
-
-		// HTTPS için SSL kontrolünü varsayılan olarak etkinleştir
-		if strings.HasPrefix(endpoint, "https://") {
-			config.SSLCheck = true
-		}
-
-		m.configs = append(m.configs, config)
+	// OPTIONS isteğine yanıt ver ve dön
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
-	return nil
-}
+	// Sadece POST isteklerini kabul et
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
 
-// saveCheckResult, kontrol sonucunu veritabanına kaydeder
-func (m *UptimeMonitor) saveCheckResult(result UptimeCheckResult) error {
-	_, err := m.db.Exec(`
-		INSERT INTO uptime_checks 
-		(service_id, status, response_time, error_message, timestamp)
-		VALUES (?, ?, ?, ?, ?)
-	`, result.ServiceID, result.Status, result.ResponseTime,
-		result.ErrorMessage, result.Timestamp)
+	// JSON isteğini çöz
+	var config struct {
+		Endpoint           string `json:"endpoint"`
+		CheckType          string `json:"checkType"`
+		Timeout            int    `json:"timeout"`
+		ExpectedStatusCode int    `json:"expectedStatusCode"`
+		ExpectedContent    string `json:"expectedContent"`
+		Username           string `json:"username"`
+		Password           string `json:"password"`
+		SSLCheck           bool   `json:"sslCheck"`
+		SSLWarningDays     int    `json:"sslWarningDays"`
+		InsecureSkip       bool   `json:"insecureSkip"`
+	}
 
-	return err
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Temel doğrulama
+	if config.Endpoint == "" {
+		http.Error(w, `{"error":"Endpoint gerekli"}`, http.StatusBadRequest)
+		return
+	}
+
+	// UptimeCheckConfig oluştur
+	uptimeConfig := UptimeCheckConfig{
+		Endpoint:           config.Endpoint,
+		CheckType:          UptimeCheckType(config.CheckType),
+		Timeout:            time.Duration(config.Timeout) * time.Second,
+		ExpectedStatusCode: config.ExpectedStatusCode,
+		ExpectedContent:    config.ExpectedContent,
+		SSLCheck:           config.SSLCheck,
+		SSLWarningDays:     config.SSLWarningDays,
+		InsecureSkip:       config.InsecureSkip,
+		Headers:            make(map[string]string),
+	}
+
+	// Basic Auth varsa ekle
+	if config.Username != "" && config.Password != "" {
+		uptimeConfig.Username = config.Username
+		uptimeConfig.Password = config.Password
+	}
+
+	// Kontrol türüne göre kontrol yap
+	var result UptimeCheckResult
+
+	switch uptimeConfig.CheckType {
+	case CheckTypeHTTP:
+		result = performHTTPCheck(uptimeConfig)
+	case CheckTypeTCP:
+		result = performTCPCheck(uptimeConfig)
+	case CheckTypeDNS:
+		result = performDNSCheck(uptimeConfig)
+	case CheckTypeCertificate:
+		result = performCertificateCheck(uptimeConfig)
+	default:
+		http.Error(w, `{"error":"Desteklenmeyen kontrol türü"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Zaman damgasını ekle
+	result.Timestamp = time.Now().Format(time.RFC3339)
+
+	// Sonucu JSON olarak döndür
+	json.NewEncoder(w).Encode(result)
 }
 
 // performHTTPCheck, HTTP/HTTPS endpoint kontrolü yapar
-func (m *UptimeMonitor) performHTTPCheck(config UptimeCheckConfig) UptimeCheckResult {
+func performHTTPCheck(config UptimeCheckConfig) UptimeCheckResult {
 	start := time.Now()
 	result := UptimeCheckResult{
-		ServiceID: config.ServiceID,
-		Timestamp: start,
-		Status:    "down",
+		Status: "down",
 	}
 
 	// TLS sertifika hatalarını atlamak için özel bir HTTP istemcisi
@@ -228,12 +214,10 @@ func (m *UptimeMonitor) performHTTPCheck(config UptimeCheckConfig) UptimeCheckRe
 }
 
 // performTCPCheck, TCP bağlantı kontrolü yapar
-func (m *UptimeMonitor) performTCPCheck(config UptimeCheckConfig) UptimeCheckResult {
+func performTCPCheck(config UptimeCheckConfig) UptimeCheckResult {
 	start := time.Now()
 	result := UptimeCheckResult{
-		ServiceID: config.ServiceID,
-		Timestamp: start,
-		Status:    "down",
+		Status: "down",
 	}
 
 	conn, err := net.DialTimeout("tcp", config.Endpoint, config.Timeout)
@@ -252,12 +236,10 @@ func (m *UptimeMonitor) performTCPCheck(config UptimeCheckConfig) UptimeCheckRes
 }
 
 // performDNSCheck, DNS çözümleme kontrolü yapar
-func (m *UptimeMonitor) performDNSCheck(config UptimeCheckConfig) UptimeCheckResult {
+func performDNSCheck(config UptimeCheckConfig) UptimeCheckResult {
 	start := time.Now()
 	result := UptimeCheckResult{
-		ServiceID: config.ServiceID,
-		Timestamp: start,
-		Status:    "down",
+		Status: "down",
 	}
 
 	_, err := net.LookupIP(config.Endpoint)
@@ -275,12 +257,10 @@ func (m *UptimeMonitor) performDNSCheck(config UptimeCheckConfig) UptimeCheckRes
 }
 
 // performCertificateCheck, HTTPS sertifikalarının geçerliliğini kontrol eder
-func (m *UptimeMonitor) performCertificateCheck(config UptimeCheckConfig) UptimeCheckResult {
+func performCertificateCheck(config UptimeCheckConfig) UptimeCheckResult {
 	start := time.Now()
 	result := UptimeCheckResult{
-		ServiceID: config.ServiceID,
-		Timestamp: start,
-		Status:    "down",
+		Status: "down",
 	}
 
 	// URL'den host kısmını çıkar
@@ -336,7 +316,7 @@ func (m *UptimeMonitor) performCertificateCheck(config UptimeCheckConfig) Uptime
 		return result
 	}
 
-	// Son kullanma tarihine yakınlık kontrolü (config'den SSLWarningDays'e göre)
+	// Son kullanma tarihine yakınlık kontrolü
 	daysLeft := int(cert.NotAfter.Sub(now).Hours() / 24)
 	if daysLeft < config.SSLWarningDays {
 		result.Status = "warning"
@@ -374,80 +354,4 @@ func verifyHostname(hostname string, cert *x509.Certificate) bool {
 	}
 
 	return false
-}
-
-// startServiceMonitoring, belirli bir servis için izleme başlatır
-func (m *UptimeMonitor) startServiceMonitoring(config UptimeCheckConfig) {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFuncs = append(m.cancelFuncs, cancel)
-
-	go func() {
-		ticker := time.NewTicker(time.Duration(config.CheckInterval) * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				var result UptimeCheckResult
-
-				// Kontrol türüne göre ilgili metodu çağır
-				switch config.CheckType {
-				case CheckTypeHTTP:
-					result = m.performHTTPCheck(config)
-				case CheckTypeTCP:
-					result = m.performTCPCheck(config)
-				case CheckTypeDNS:
-					result = m.performDNSCheck(config)
-				case CheckTypeCertificate:
-					result = m.performCertificateCheck(config)
-				default:
-					log.Printf("Desteklenmeyen kontrol türü: %v", config.CheckType)
-					continue
-				}
-
-				// Sonucu kaydet
-				err := m.saveCheckResult(result)
-				if err != nil {
-					log.Printf("Kontrol sonucu kaydedilemedi: %v", err)
-				}
-
-				// Hata durumunda log at
-				if result.Status == "down" {
-					log.Printf("Servis %d durumu: %s - %s",
-						result.ServiceID, result.Status, result.ErrorMessage)
-				}
-			}
-		}
-	}()
-}
-
-// StartUptimeMonitoring, tüm servislerin izlemesini başlatır
-func (m *UptimeMonitor) StartUptimeMonitoring() error {
-	// Servis yapılandırmalarını yükle
-	err := m.loadServiceConfigs()
-	if err != nil {
-		return fmt.Errorf("servis yapılandırmaları yüklenemedi: %v", err)
-	}
-
-	// Her bir servis için izlemeyi başlat
-	for _, config := range m.configs {
-		m.startServiceMonitoring(config)
-	}
-
-	log.Printf("%d servis için uptime izlemesi başlatıldı", len(m.configs))
-	return nil
-}
-
-// StopUptimeMonitoring, tüm izleme işlemlerini durdurur
-func (m *UptimeMonitor) StopUptimeMonitoring() {
-	m.configMutex.Lock()
-	defer m.configMutex.Unlock()
-
-	for _, cancel := range m.cancelFuncs {
-		cancel()
-	}
-	m.cancelFuncs = []context.CancelFunc{}
-	log.Println("Uptime izlemesi durduruldu")
 }

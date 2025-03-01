@@ -31,6 +31,9 @@ export default function RootLayout({
               <Link href="/alerts" className="block py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700">
                 Alarmlar
               </Link>
+              <Link href="/test-uptime" className="block py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700">
+                Uptime Test
+              </Link>
               <Link href="/settings" className="block py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700">
                 Ayarlar
               </Link>

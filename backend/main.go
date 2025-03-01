@@ -16,6 +16,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"backend/api/handlers" // Bu handler'ları içeri aktarır
 )
 
 // Küresel değişkenler
@@ -837,6 +839,7 @@ func main() {
 	http.HandleFunc("/api/v1/namespaces", namespacesHandler)
 	http.HandleFunc("/api/v1/kubernetes/services", k8sServicesHandler)
 	http.HandleFunc("/api/v1/settings", settingsHandler)
+	http.HandleFunc("/api/v1/test-uptime", handlers.HandleUptimeTest)
 
 	// Cluster API endpoint'lerini ekle
 	http.HandleFunc("/api/v1/clusters", clustersHandler)

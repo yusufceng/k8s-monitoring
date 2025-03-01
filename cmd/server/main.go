@@ -66,4 +66,5 @@ func main() {
 	}
 
 	l.Info("Sunucu başarıyla kapatıldı")
+
 }

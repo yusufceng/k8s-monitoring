@@ -44,6 +44,10 @@ func RunMigrations(db *sql.DB) error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)`)
+	_, err = db.Exec(`
+    ALTER TABLE uptime_checks 
+    ADD COLUMN detailed_info TEXT
+    `)
 	if err != nil {
 		return fmt.Errorf("services tablosu oluşturulamadı: %w", err)
 	}

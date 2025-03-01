@@ -44,6 +44,7 @@ type UptimeCheckResult struct {
 	ResponseTime int64  `json:"responseTime,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	Timestamp    string `json:"timestamp"`
+	DetailedInfo string `json:"detailed_info,omitempty"` // Yeni alan
 }
 
 // HandleUptimeTest, uptime test endpoint'i için handler

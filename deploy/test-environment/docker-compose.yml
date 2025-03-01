@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: test-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - test-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: test-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    networks:
+      - test-network
+    depends_on:
+      - prometheus
+
+  # Test servisi 1
+  fake-service-1:
+    image: containous/whoami:latest
+    container_name: fake-service-1
+    ports:
+      - "8081:80"
+    labels:
+      - "service.name=frontend-service"
+    restart: unless-stopped
+    networks:
+      - test-network
+
+  # Test servisi 2
+  fake-service-2:
+    image: containous/whoami:latest
+    container_name: fake-service-2
+    ports:
+      - "8082:80" 
+    labels:
+      - "service.name=backend-service"
+    restart: unless-stopped
+    networks:
+      - test-network
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  test-network:
+    driver: bridge

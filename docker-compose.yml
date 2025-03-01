@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: k8s-monitoring-backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      - ~/.kube/config:/root/.kube/config:ro
+    environment:
+      - DB_PATH=/data/monitoring.db
+      - SERVER_PORT=8080
+      # Kubeconfig tabanlı kimlik doğrulama (öncelikli olarak token kullanılacak)
+      - K8S_CONFIG_PATH=/root/.kube/config
+      # Token tabanlı kimlik doğrulama (varsa, bunlar kullanılacak)
+      - K8S_API_URL=
+      - K8S_API_TOKEN=
+      - K8S_SKIP_TLS_VERIFY=false
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: k8s-monitoring-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
+networks:
+  monitoring-network:
+    driver: bridge

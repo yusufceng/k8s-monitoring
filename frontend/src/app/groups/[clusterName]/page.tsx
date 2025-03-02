@@ -1,11 +1,11 @@
 "use client";
-
+import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useParams } from "next/navigation";
 import { ServiceCard, Service } from "@/components/ServiceCard";
 import { Line } from "react-chartjs-2";
-import { ChartOptions } from 'chart.js';
+import { ChartOptions } from "chart.js";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -79,41 +79,23 @@ function UptimeChartModal({ serviceId, onClose }: UptimeChartModalProps) {
     ],
   };
 
-
-// Düzeltilmiş Line chart options tipi
-const options: ChartOptions<'line'> = {
-  responsive: true,
-  plugins: {
-    legend: {
-      position: 'top', // 'top' olarak kesin bir değer
-      labels: {
-        // Gerekirse ek etiket ayarları
-      }
+  const options: ChartOptions<"line"> = {
+    responsive: true,
+    plugins: {
+      legend: { position: "top" as const },
+      title: { display: true, text: "Zaman Serisi: Yanıt Süresi" },
     },
-    title: {
-      display: true,
-      text: 'Uptime Performansı'
-    }
-  },
-  scales: {
-    x: {
-      type: 'time',
-      time: {
-        unit: 'day'
+    scales: {
+      x: {
+        type: "time" as const,
+        time: { unit: "day" },
+        title: { display: true, text: "Tarih" },
       },
-      title: {
-        display: true,
-        text: 'Tarih'
-      }
+      y: {
+        title: { display: true, text: "Response Time (ms)" },
+      },
     },
-    y: {
-      title: {
-        display: true,
-        text: 'Yanıt Süresi (ms)'
-      }
-    }
-  }
-};
+  };
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">

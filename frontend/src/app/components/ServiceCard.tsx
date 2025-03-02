@@ -1,7 +1,7 @@
-// frontend/src/app/components/ServiceCard.tsx
 "use client";
 
 import React from "react";
+import { MiniChart, MiniChartData } from "./MiniChart";
 import Link from "next/link";
 
 export type Service = {
@@ -16,6 +16,8 @@ export type Service = {
   lastCheck?: string;
   responseTime?: number;
   uptimePercentage?: number;
+  // Grafik için opsiyonel veri, varsa backend'den gelmeli
+  chartData?: MiniChartData[];
 };
 
 type ServiceCardProps = {
@@ -39,18 +41,24 @@ const getCardBgColor = (status?: string) => {
 };
 
 export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDelete, onChart }) => {
+  // Eğer grafik verisi yoksa dummy veri oluşturun
+  const dummyData: MiniChartData[] = service.chartData || [
+    { time: "00:00", value: service.uptimePercentage ?? 0 },
+    { time: "01:00", value: (service.uptimePercentage ?? 0) + 5 },
+    { time: "02:00", value: (service.uptimePercentage ?? 0) - 3 },
+    { time: "03:00", value: (service.uptimePercentage ?? 0) + 2 },
+  ];
+
   return (
     <div className={`p-6 rounded-lg shadow ${getCardBgColor(service.status)} flex flex-col`}>
-      <div className="flex justify-between items-start">
-        <h2 className="text-2xl font-semibold text-gray-800 mb-2">{service.name}</h2>
-        <button
-          onClick={() => onChart(service)}
-          className="ml-2 px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition"
-        >
-          Grafik
-        </button>
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-semibold text-gray-800">{service.name}</h2>
+        {/* Modüler MiniChart bileşeni */}
+        <div className="w-24 h-12">
+          <MiniChart data={dummyData} />
+        </div>
       </div>
-      <div className="flex-1">
+      <div className="mt-4 flex-1">
         <p className="text-sm text-gray-600">Namespace: {service.namespace}</p>
         <p className="text-sm text-gray-600">Tip: {service.type}</p>
         {service.endpoint && (
@@ -58,7 +66,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDel
         )}
         <p className="text-sm text-gray-600">Durum: {service.status || "Bilinmiyor"}</p>
         <p className="text-sm text-gray-600">
-          Yanıt: {service.responseTime ? service.responseTime + " ms" : "-"}
+          Yanıt: {service.responseTime ? `${service.responseTime} ms` : "-"}
         </p>
       </div>
       {/* Uptime Progress Bar */}
@@ -85,13 +93,13 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDel
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           onClick={() => onEdit(service)}
-          className="px-4 py-2 bg-indigo-500 text-white rounded-md hover:bg-indigo-600 transition"
+          className="px-4 py-2 bg-indigo-500 text-white rounded-lg shadow hover:bg-indigo-600 transition-all duration-200"
         >
           Düzenle
         </button>
         <button
           onClick={() => onDelete(service)}
-          className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition"
+          className="px-4 py-2 bg-red-500 text-white rounded-lg shadow hover:bg-red-600 transition-all duration-200"
         >
           Sil
         </button>

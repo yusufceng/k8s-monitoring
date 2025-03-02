@@ -6,9 +6,7 @@ import axios from 'axios';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import DetailModal from '@/components/DetailModal';
-
-
+import DetailModal from '../../components/DetailModal';
 
 // Mevcut tipler
 type Service = {

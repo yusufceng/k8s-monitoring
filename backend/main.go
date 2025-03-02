@@ -861,6 +861,20 @@ func main() {
 		}
 		http.NotFound(w, r)
 	})
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// CORS ayarları
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// OPTIONS metodunu destekle
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Mevcut kod devam eder
+	})
 
 	// Servis keşfi arka plan işlemi
 	if clientset != nil {

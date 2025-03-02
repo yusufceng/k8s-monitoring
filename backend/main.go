@@ -581,6 +581,13 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Etkilenen satır sayısını kontrol et
+		rowsAffected, _ := db.Exec("SELECT changes()")
+		if rowsAffected == nil {
+			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
+			return
+		}
+
 		// Başarılı yanıt hazırla
 		response := map[string]interface{}{
 			"service": map[string]interface{}{
@@ -984,7 +991,7 @@ func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Veritabanında servisi güncelle
-		result, err := db.Exec(`
+		_, err := db.Exec(`
             UPDATE services 
             SET name = ?, namespace = ?, cluster = ?, 
                 type = ?, endpoint = ?, check_interval = ?, 
@@ -995,13 +1002,6 @@ func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"Servis güncellenemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Etkilenen satır sayısını kontrol et
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
 			return
 		}
 
@@ -1107,14 +1107,8 @@ func main() {
 		clusterHandler(w, r)
 	})
 
-	// Servis detayları endpoint'i
-	http.HandleFunc("/api/v1/services/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" {
-			serviceDetailHandler(w, r)
-			return
-		}
-		http.NotFound(w, r)
-	})
+	// NOT: "/api/v1/services/" endpoint'i yalnızca serviceDetailHandler ile kaydedildi,
+	// duplicate kayıt yapan ek bir blok kaldırıldı.
 
 	corsMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1144,5 +1138,5 @@ func main() {
 	}
 	httpHandler := corsMiddleware(http.DefaultServeMux)
 	log.Printf("Server %s portunda çalışıyor...", port)
-	log.Fatal(http.ListenAndServe(":"+port, httpHandler)) // httpHandler'ı burada kullanın
+	log.Fatal(http.ListenAndServe(":"+port, httpHandler))
 }

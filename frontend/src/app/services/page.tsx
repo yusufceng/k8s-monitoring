@@ -84,30 +84,38 @@ export default function ServicesPage() {
     }
   };
 
-  // Servis ekle
   const addService = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await axios.post(`${apiUrl}/api/v1/services`, newService);
-      setServices([...services, response.data.service]);
-      setShowAddModal(false);
-      setNewService({
-        name: '',
-        namespace: 'default',
-        cluster: 'default',
-        type: 'http',
-        endpoint: '',
-        check_interval: 60
-      });
-      setSuccess('Servis başarıyla eklendi');
-      setTimeout(() => setSuccess(''), 3000);
-      fetchServices(); // Listeyi yenile
+        const response = await axios.post(`${apiUrl}/api/v1/services`, {
+            name: newService.name,
+            namespace: newService.namespace,
+            cluster: newService.cluster,
+            type: newService.type,
+            endpoint: newService.endpoint,
+            check_interval: newService.check_interval
+        });
+        
+        // Backend'den gelen servis bilgilerini kullan
+        setServices([...services, response.data.service]);
+        
+        // Modal ve form state'lerini sıfırla
+        setShowAddModal(false);
+        setNewService({
+            name: '',
+            namespace: 'default',
+            cluster: 'default',
+            type: 'http',
+            endpoint: '',
+            check_interval: 60
+        });
+        
+        setSuccess('Servis başarıyla eklendi');
     } catch (err) {
-      console.error('Servis eklenirken hata oluştu:', err);
-      setError('Servis eklenirken bir hata oluştu.');
-      setTimeout(() => setError(''), 3000);
+        console.error('Servis eklenirken hata oluştu:', err);
+        setError('Servis eklenirken bir hata oluştu.');
     }
-  };
+};
 
   // Servisi düzenlemek için hazırla
   const prepareEdit = (service: Service) => {

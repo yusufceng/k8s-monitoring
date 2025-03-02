@@ -353,7 +353,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// servicesHandler endpoint'i
 func servicesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// CORS başlıklarını ekle
@@ -372,11 +371,11 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 		// Servisleri al ve son durum bilgisini ekle
 		rows, err := db.Query(`
             SELECT s.id, s.name, s.namespace, s.cluster, s.type, 
-                  COALESCE(s.endpoint, '') as endpoint, 
-                  COALESCE(s.check_interval, 60) as check_interval,
-                  COALESCE(uc.status, 'unknown') as status,
-                  COALESCE(uc.timestamp, '') as last_check,
-                  COALESCE(uc.response_time, 0) as response_time
+                   COALESCE(s.endpoint, '') as endpoint, 
+                   COALESCE(s.check_interval, 60) as check_interval,
+                   COALESCE(uc.status, 'unknown') as status,
+                   COALESCE(uc.timestamp, '') as last_check,
+                   COALESCE(uc.response_time, 0) as response_time
             FROM services s
             LEFT JOIN (
                 SELECT service_id, status, timestamp, response_time
@@ -444,13 +443,199 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 			services = append(services, serviceInfo)
 		}
 
+		// Hata kontrolü
+		if err := rows.Err(); err != nil {
+			http.Error(w, `{"error":"Veri tarama hatası"}`, http.StatusInternalServerError)
+			return
+		}
+
 		response := map[string]interface{}{
 			"services": services,
 		}
 
 		json.NewEncoder(w).Encode(response)
 
-		// POST, PUT, DELETE metotları burada...
+	case "POST":
+		// Yeni servis için yapılandırma struct'ı
+		var newService struct {
+			Name          string `json:"name"`
+			Namespace     string `json:"namespace"`
+			Cluster       string `json:"cluster"`
+			Type          string `json:"type"`
+			Endpoint      string `json:"endpoint"`
+			CheckInterval int    `json:"check_interval"`
+		}
+
+		// İstek gövdesini decode et
+		if err := json.NewDecoder(r.Body).Decode(&newService); err != nil {
+			http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Gerekli alan kontrolü
+		if newService.Name == "" {
+			http.Error(w, `{"error":"Servis adı gereklidir"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Varsayılan değerler
+		if newService.Namespace == "" {
+			newService.Namespace = "default"
+		}
+		if newService.Cluster == "" {
+			newService.Cluster = "default"
+		}
+		if newService.CheckInterval == 0 {
+			newService.CheckInterval = 60 // Varsayılan 60 saniye
+		}
+
+		// Veritabanına servis ekle
+		result, err := db.Exec(`
+            INSERT INTO services 
+            (name, namespace, cluster, type, endpoint, check_interval) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        `, newService.Name, newService.Namespace, newService.Cluster,
+			newService.Type, newService.Endpoint, newService.CheckInterval)
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Servis eklenemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		// Eklenen servisin ID'sini al
+		id, _ := result.LastInsertId()
+
+		// Başarılı yanıt hazırla
+		response := map[string]interface{}{
+			"service": map[string]interface{}{
+				"id":             id,
+				"name":           newService.Name,
+				"namespace":      newService.Namespace,
+				"cluster":        newService.Cluster,
+				"type":           newService.Type,
+				"endpoint":       newService.Endpoint,
+				"check_interval": newService.CheckInterval,
+			},
+			"message": "Servis başarıyla eklendi",
+		}
+
+		// JSON yanıtı gönder
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(response)
+
+	case "PUT":
+		// URL'den servis ID'sini al
+		idStr := r.URL.Path[len("/api/v1/services/"):]
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Güncellenecek servis bilgisi için struct
+		var updateService struct {
+			Name          string `json:"name"`
+			Namespace     string `json:"namespace"`
+			Cluster       string `json:"cluster"`
+			Type          string `json:"type"`
+			Endpoint      string `json:"endpoint"`
+			CheckInterval int    `json:"check_interval"`
+		}
+
+		// İstek gövdesini decode et
+		if err := json.NewDecoder(r.Body).Decode(&updateService); err != nil {
+			http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Gerekli alan kontrolü
+		if updateService.Name == "" {
+			http.Error(w, `{"error":"Servis adı gereklidir"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Varsayılan değerler
+		if updateService.Namespace == "" {
+			updateService.Namespace = "default"
+		}
+		if updateService.Cluster == "" {
+			updateService.Cluster = "default"
+		}
+		if updateService.CheckInterval == 0 {
+			updateService.CheckInterval = 60 // Varsayılan 60 saniye
+		}
+
+		// Veritabanında servisi güncelle
+		_, err = db.Exec(`
+            UPDATE services 
+            SET name = ?, namespace = ?, cluster = ?, 
+                type = ?, endpoint = ?, check_interval = ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        `, updateService.Name, updateService.Namespace, updateService.Cluster,
+			updateService.Type, updateService.Endpoint, updateService.CheckInterval, id)
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Servis güncellenemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		// Başarılı yanıt hazırla
+		response := map[string]interface{}{
+			"service": map[string]interface{}{
+				"id":             id,
+				"name":           updateService.Name,
+				"namespace":      updateService.Namespace,
+				"cluster":        updateService.Cluster,
+				"type":           updateService.Type,
+				"endpoint":       updateService.Endpoint,
+				"check_interval": updateService.CheckInterval,
+			},
+			"message": "Servis başarıyla güncellendi",
+		}
+
+		// JSON yanıtı gönder
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
+	case "DELETE":
+		// URL'den servis ID'sini al
+		idStr := r.URL.Path[len("/api/v1/services/"):]
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Servisi veritabanından sil
+		result, err := db.Exec("DELETE FROM services WHERE id = ?", id)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Servis silinemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		// Etkilenen satır sayısını kontrol et
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
+			return
+		}
+
+		// İlgili uptime kontrollerini de sil
+		db.Exec("DELETE FROM uptime_checks WHERE service_id = ?", id)
+
+		// Başarılı yanıt
+		response := map[string]interface{}{
+			"message": "Servis başarıyla silindi",
+		}
+
+		// JSON yanıtı gönder
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
+	default:
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -634,116 +819,240 @@ func serviceDiscoveryWorker() {
 	}
 }
 
-// Diğer handler fonksiyonlarının arasına veya sonuna ekleyin
 func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
-	// URL'den servis ID parametresini al
-	idStr := r.URL.Path[len("/api/v1/services/"):]
+	// CORS başlıklarını ekle
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// OPTIONS isteğini yönet
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// URL'den son segmenti al
+	pathSegments := strings.Split(r.URL.Path, "/")
+	if len(pathSegments) < 4 {
+		http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Son segment ID'dir
+	idStr := pathSegments[len(pathSegments)-1]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Servis detaylarını getir
-	var service struct {
-		ID            int
-		Name          string
-		Namespace     string
-		Cluster       string
-		Type          string
-		Endpoint      sql.NullString
-		CheckInterval int
-	}
-
-	err = db.QueryRow(`
-		SELECT id, name, namespace, cluster, type, 
-		       COALESCE(endpoint, '') as endpoint, 
-		       COALESCE(check_interval, 60) as check_interval 
-		FROM services 
-		WHERE id = ?
-	`, id).Scan(
-		&service.ID,
-		&service.Name,
-		&service.Namespace,
-		&service.Cluster,
-		&service.Type,
-		&service.Endpoint,
-		&service.CheckInterval,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, `{"error":"Servis bulunamadı"}`, http.StatusNotFound)
-		} else {
-			http.Error(w, fmt.Sprintf(`{"error":"Veritabanı hatası: %v"}`, err), http.StatusInternalServerError)
-		}
-		return
-	}
-
-	// Son uptime kontrol sonuçlarını getir
-	rows, err := db.Query(`
-		SELECT status, response_time, error_message, timestamp
-		FROM uptime_checks
-		WHERE service_id = ?
-		ORDER BY timestamp DESC
-		LIMIT 10
-	`, id)
-
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrolleri getirilemedi: %v"}`, err), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	uptimeChecks := []map[string]interface{}{}
-	for rows.Next() {
-		var check struct {
-			Status       string
-			ResponseTime int64
-			ErrorMessage sql.NullString
-			Timestamp    time.Time
+	switch r.Method {
+	case "GET":
+		// Mevcut GET metodu kodu buraya gelecek
+		var service struct {
+			ID            int
+			Name          string
+			Namespace     string
+			Cluster       string
+			Type          string
+			Endpoint      sql.NullString
+			CheckInterval int
 		}
 
-		err := rows.Scan(
-			&check.Status,
-			&check.ResponseTime,
-			&check.ErrorMessage,
-			&check.Timestamp,
+		err = db.QueryRow(`
+            SELECT id, name, namespace, cluster, type, 
+                   COALESCE(endpoint, '') as endpoint, 
+                   COALESCE(check_interval, 60) as check_interval 
+            FROM services 
+            WHERE id = ?
+        `, id).Scan(
+			&service.ID,
+			&service.Name,
+			&service.Namespace,
+			&service.Cluster,
+			&service.Type,
+			&service.Endpoint,
+			&service.CheckInterval,
 		)
+
 		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrol verisi okunamadı: %v"}`, err), http.StatusInternalServerError)
+			if err == sql.ErrNoRows {
+				http.Error(w, `{"error":"Servis bulunamadı"}`, http.StatusNotFound)
+			} else {
+				http.Error(w, fmt.Sprintf(`{"error":"Veritabanı hatası: %v"}`, err), http.StatusInternalServerError)
+			}
 			return
 		}
 
-		uptimeCheck := map[string]interface{}{
-			"status":        check.Status,
-			"response_time": check.ResponseTime,
-			"timestamp":     check.Timestamp,
+		// Son uptime kontrol sonuçlarını getir
+		rows, err := db.Query(`
+            SELECT status, response_time, error_message, timestamp
+            FROM uptime_checks
+            WHERE service_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 10
+        `, id)
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrolleri getirilemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		uptimeChecks := []map[string]interface{}{}
+		for rows.Next() {
+			var check struct {
+				Status       string
+				ResponseTime int64
+				ErrorMessage sql.NullString
+				Timestamp    time.Time
+			}
+
+			err := rows.Scan(
+				&check.Status,
+				&check.ResponseTime,
+				&check.ErrorMessage,
+				&check.Timestamp,
+			)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrol verisi okunamadı: %v"}`, err), http.StatusInternalServerError)
+				return
+			}
+
+			uptimeCheck := map[string]interface{}{
+				"status":        check.Status,
+				"response_time": check.ResponseTime,
+				"timestamp":     check.Timestamp,
+			}
+
+			if check.ErrorMessage.Valid {
+				uptimeCheck["error_message"] = check.ErrorMessage.String
+			}
+
+			uptimeChecks = append(uptimeChecks, uptimeCheck)
 		}
 
-		if check.ErrorMessage.Valid {
-			uptimeCheck["error_message"] = check.ErrorMessage.String
+		// Yanıtı hazırla
+		response := map[string]interface{}{
+			"service": map[string]interface{}{
+				"id":             service.ID,
+				"name":           service.Name,
+				"namespace":      service.Namespace,
+				"cluster":        service.Cluster,
+				"type":           service.Type,
+				"check_interval": service.CheckInterval,
+				"endpoint":       service.Endpoint.String,
+			},
+			"uptime_checks": uptimeChecks,
 		}
 
-		uptimeChecks = append(uptimeChecks, uptimeCheck)
-	}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 
-	// Yanıtı hazırla
-	response := map[string]interface{}{
-		"service": map[string]interface{}{
-			"id":             service.ID,
-			"name":           service.Name,
-			"namespace":      service.Namespace,
-			"cluster":        service.Cluster,
-			"type":           service.Type,
-			"check_interval": service.CheckInterval,
-			"endpoint":       service.Endpoint.String,
-		},
-		"uptime_checks": uptimeChecks,
-	}
+	case "PUT":
+		// Güncellenecek servis bilgisi için struct
+		var updateService struct {
+			Name          string `json:"name"`
+			Namespace     string `json:"namespace"`
+			Cluster       string `json:"cluster"`
+			Type          string `json:"type"`
+			Endpoint      string `json:"endpoint"`
+			CheckInterval int    `json:"check_interval"`
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+		// İstek gövdesini decode et
+		if err := json.NewDecoder(r.Body).Decode(&updateService); err != nil {
+			http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Gerekli alan kontrolü
+		if updateService.Name == "" {
+			http.Error(w, `{"error":"Servis adı gereklidir"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Varsayılan değerler
+		if updateService.Namespace == "" {
+			updateService.Namespace = "default"
+		}
+		if updateService.Cluster == "" {
+			updateService.Cluster = "default"
+		}
+		if updateService.CheckInterval == 0 {
+			updateService.CheckInterval = 60 // Varsayılan 60 saniye
+		}
+
+		// Veritabanında servisi güncelle
+		result, err := db.Exec(`
+            UPDATE services 
+            SET name = ?, namespace = ?, cluster = ?, 
+                type = ?, endpoint = ?, check_interval = ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        `, updateService.Name, updateService.Namespace, updateService.Cluster,
+			updateService.Type, updateService.Endpoint, updateService.CheckInterval, id)
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Servis güncellenemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		// Etkilenen satır sayısını kontrol et
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
+			return
+		}
+
+		// Başarılı yanıt hazırla
+		response := map[string]interface{}{
+			"service": map[string]interface{}{
+				"id":             id,
+				"name":           updateService.Name,
+				"namespace":      updateService.Namespace,
+				"cluster":        updateService.Cluster,
+				"type":           updateService.Type,
+				"endpoint":       updateService.Endpoint,
+				"check_interval": updateService.CheckInterval,
+			},
+			"message": "Servis başarıyla güncellendi",
+		}
+
+		// JSON yanıtı gönder
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
+	case "DELETE":
+		// Servisi veritabanından sil
+		result, err := db.Exec("DELETE FROM services WHERE id = ?", id)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Servis silinemedi: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		// Etkilenen satır sayısını kontrol et
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
+			return
+		}
+
+		// İlgili uptime kontrollerini de sil
+		db.Exec("DELETE FROM uptime_checks WHERE service_id = ?", id)
+
+		// Başarılı yanıt
+		response := map[string]interface{}{
+			"message": "Servis başarıyla silindi",
+		}
+
+		// JSON yanıtı gönder
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+
+	default:
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+	}
 }
 
 func main() {
@@ -780,6 +1089,7 @@ func main() {
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/api/v1/health", healthHandler)
 	http.HandleFunc("/api/v1/services", servicesHandler)
+	http.HandleFunc("/api/v1/services/", serviceDetailHandler)
 	http.HandleFunc("/api/v1/namespaces", namespacesHandler)
 	http.HandleFunc("/api/v1/kubernetes/services", k8sServicesHandler)
 	http.HandleFunc("/api/v1/settings", settingsHandler)
@@ -805,9 +1115,9 @@ func main() {
 		}
 		http.NotFound(w, r)
 	})
+
 	corsMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// CORS ayarları
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -818,7 +1128,6 @@ func main() {
 				return
 			}
 
-			// İsteği bir sonraki handler'a ilet
 			next.ServeHTTP(w, r)
 		})
 	}

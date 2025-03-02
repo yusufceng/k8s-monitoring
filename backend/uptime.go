@@ -451,3 +451,28 @@ func (m *UptimeMonitor) StopUptimeMonitoring() {
 	m.cancelFuncs = []context.CancelFunc{}
 	log.Println("Uptime izlemesi durduruldu")
 }
+
+// CalculateUptimePercentage, belirli bir servis için uptime yüzdesini hesaplar.
+// Bu hesaplama, uptime_checks tablosundaki tüm kayıtlar üzerinden yapılır.
+func (m *UptimeMonitor) CalculateUptimePercentage(serviceID int) (float64, error) {
+	var totalChecks int
+	var upChecks int
+
+	// Toplam kontrol sayısını al
+	err := m.db.QueryRow(`SELECT COUNT(*) FROM uptime_checks WHERE service_id = ?`, serviceID).Scan(&totalChecks)
+	if err != nil {
+		return 0, fmt.Errorf("kontrol sayısı alınamadı: %v", err)
+	}
+	if totalChecks == 0 {
+		return 0, nil // Kayıt yoksa yüzde 0 döndür
+	}
+
+	// "up" statüsünde olan kontrol sayısını al
+	err = m.db.QueryRow(`SELECT COUNT(*) FROM uptime_checks WHERE service_id = ? AND status = 'up'`, serviceID).Scan(&upChecks)
+	if err != nil {
+		return 0, fmt.Errorf("up kontrolleri alınamadı: %v", err)
+	}
+
+	percentage := (float64(upChecks) / float64(totalChecks)) * 100.0
+	return percentage, nil
+}

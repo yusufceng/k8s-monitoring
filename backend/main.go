@@ -22,9 +22,10 @@ import (
 
 // Küresel değişkenler
 var (
-	db        *sql.DB
-	clientset *kubernetes.Clientset
-	ctx       = context.Background()
+	db            *sql.DB
+	clientset     *kubernetes.Clientset
+	ctx           = context.Background()
+	uptimeMonitor *UptimeMonitor // Global uptime monitor
 )
 
 // Veritabanı bağlantısını başlat
@@ -427,17 +428,25 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// Uptime yüzdesini hesapla
+			uptimePct, err := uptimeMonitor.CalculateUptimePercentage(service.ID)
+			if err != nil {
+				log.Printf("Uptime hesaplaması hatası (serviceID %d): %v", service.ID, err)
+				uptimePct = 0
+			}
+
 			serviceInfo := map[string]interface{}{
-				"id":             service.ID,
-				"name":           service.Name,
-				"namespace":      service.Namespace,
-				"cluster":        service.Cluster,
-				"type":           service.Type,
-				"endpoint":       service.Endpoint,
-				"check_interval": service.CheckInterval,
-				"status":         service.Status,
-				"lastCheck":      service.LastCheck,
-				"responseTime":   service.ResponseTime,
+				"id":               service.ID,
+				"name":             service.Name,
+				"namespace":        service.Namespace,
+				"cluster":          service.Cluster,
+				"type":             service.Type,
+				"endpoint":         service.Endpoint,
+				"check_interval":   service.CheckInterval,
+				"status":           service.Status,
+				"lastCheck":        service.LastCheck,
+				"responseTime":     service.ResponseTime,
+				"uptimePercentage": uptimePct,
 			}
 
 			services = append(services, serviceInfo)
@@ -578,13 +587,6 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"Servis güncellenemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Etkilenen satır sayısını kontrol et
-		rowsAffected, _ := db.Exec("SELECT changes()")
-		if rowsAffected == nil {
-			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
 			return
 		}
 
@@ -1024,6 +1026,14 @@ func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(response)
 
 	case "DELETE":
+		// URL'den servis ID'sini al
+		idStr := r.URL.Path[len("/api/v1/services/"):]
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
+			return
+		}
+
 		// Servisi veritabanından sil
 		result, err := db.Exec("DELETE FROM services WHERE id = ?", id)
 		if err != nil {
@@ -1078,8 +1088,8 @@ func main() {
 		log.Println("Kubernetes bağlantısı başarıyla kuruldu")
 	}
 
-	// Uptime monitor'ü başlat
-	uptimeMonitor := NewUptimeMonitor(db)
+	// Uptime monitor'ü global değişkene ata ve başlat
+	uptimeMonitor = NewUptimeMonitor(db)
 	err = uptimeMonitor.StartUptimeMonitoring()
 	if err != nil {
 		log.Printf("Uptime izleme başlatılamadı: %v", err)

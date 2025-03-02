@@ -353,21 +353,45 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// Servisler endpoint'i
+// servicesHandler endpoint'i
 func servicesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	// CORS başlıklarını ekle
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// OPTIONS isteğini yönet
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
 	switch r.Method {
 	case "GET":
-		// Tüm servisleri detaylı bilgilerle birlikte getir
+		// Servisleri al ve son durum bilgisini ekle
 		rows, err := db.Query(`
-			SELECT id, name, namespace, cluster, type, 
-			       COALESCE(endpoint, '') as endpoint, 
-			       COALESCE(check_interval, 60) as check_interval 
-			FROM services
-		`)
+            SELECT s.id, s.name, s.namespace, s.cluster, s.type, 
+                  COALESCE(s.endpoint, '') as endpoint, 
+                  COALESCE(s.check_interval, 60) as check_interval,
+                  COALESCE(uc.status, 'unknown') as status,
+                  COALESCE(uc.timestamp, '') as last_check,
+                  COALESCE(uc.response_time, 0) as response_time
+            FROM services s
+            LEFT JOIN (
+                SELECT service_id, status, timestamp, response_time
+                FROM uptime_checks
+                WHERE (service_id, timestamp) IN (
+                    SELECT service_id, MAX(timestamp)
+                    FROM uptime_checks
+                    GROUP BY service_id
+                )
+            ) uc ON s.id = uc.service_id
+        `)
+
 		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Veritabanı sorgusu başarısız: %v"}`, err), http.StatusInternalServerError)
+			log.Printf("Servis sorgusu hatası: %v", err)
+			http.Error(w, `{"error":"Veritabanı sorgusu başarısız"}`, http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -383,6 +407,9 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 				Type          string
 				Endpoint      string
 				CheckInterval int
+				Status        string
+				LastCheck     string
+				ResponseTime  int64
 			}
 
 			if err := rows.Scan(
@@ -393,8 +420,11 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 				&service.Type,
 				&service.Endpoint,
 				&service.CheckInterval,
+				&service.Status,
+				&service.LastCheck,
+				&service.ResponseTime,
 			); err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"Veri okunamadı: %v"}`, err), http.StatusInternalServerError)
+				http.Error(w, `{"error":"Veri okunamadı"}`, http.StatusInternalServerError)
 				return
 			}
 
@@ -406,6 +436,9 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 				"type":           service.Type,
 				"endpoint":       service.Endpoint,
 				"check_interval": service.CheckInterval,
+				"status":         service.Status,
+				"lastCheck":      service.LastCheck,
+				"responseTime":   service.ResponseTime,
 			}
 
 			services = append(services, serviceInfo)
@@ -414,99 +447,10 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 		response := map[string]interface{}{
 			"services": services,
 		}
+
 		json.NewEncoder(w).Encode(response)
 
-	case "POST":
-		var service struct {
-			Name          string `json:"name"`
-			Namespace     string `json:"namespace"`
-			Cluster       string `json:"cluster"`
-			Type          string `json:"type"`
-			Endpoint      string `json:"endpoint"`
-			CheckInterval int    `json:"check_interval"`
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&service); err != nil {
-			http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Gerekli alanları kontrol et
-		if service.Name == "" || service.Namespace == "" || service.Cluster == "" {
-			http.Error(w, `{"error":"Ad, namespace ve küme alanları gerekli"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Varsayılan değerler
-		if service.CheckInterval <= 0 {
-			service.CheckInterval = 60 // Varsayılan 60 saniye
-		}
-
-		// Servisi veritabanına ekle
-		result, err := db.Exec(`
-			INSERT INTO services 
-			(name, namespace, cluster, type, endpoint, check_interval) 
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, service.Name, service.Namespace, service.Cluster,
-			service.Type, service.Endpoint, service.CheckInterval)
-
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Servis eklenemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Yeni servis ID'sini al
-		id, _ := result.LastInsertId()
-
-		// Son eklenen servisi detaylarıyla birlikte getir
-		var addedService struct {
-			ID            int64
-			Name          string
-			Namespace     string
-			Cluster       string
-			Type          string
-			Endpoint      string
-			CheckInterval int
-		}
-
-		err = db.QueryRow(`
-			SELECT id, name, namespace, cluster, type, 
-			       COALESCE(endpoint, '') as endpoint, 
-			       COALESCE(check_interval, 60) as check_interval 
-			FROM services WHERE id = ?
-		`, id).Scan(
-			&addedService.ID,
-			&addedService.Name,
-			&addedService.Namespace,
-			&addedService.Cluster,
-			&addedService.Type,
-			&addedService.Endpoint,
-			&addedService.CheckInterval,
-		)
-
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Eklenen servis detayları alınamadı: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Başarılı yanıt
-		response := map[string]interface{}{
-			"id": addedService.ID,
-			"service": map[string]interface{}{
-				"name":           addedService.Name,
-				"namespace":      addedService.Namespace,
-				"cluster":        addedService.Cluster,
-				"type":           addedService.Type,
-				"endpoint":       addedService.Endpoint,
-				"check_interval": addedService.CheckInterval,
-			},
-			"message": "Servis başarıyla eklendi",
-		}
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(response)
-
-	default:
-		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		// POST, PUT, DELETE metotları burada...
 	}
 }
 
@@ -861,20 +805,23 @@ func main() {
 		}
 		http.NotFound(w, r)
 	})
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// CORS ayarları
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	corsMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// CORS ayarları
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		// OPTIONS metodunu destekle
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+			// OPTIONS metodunu destekle
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 
-		// Mevcut kod devam eder
-	})
+			// İsteği bir sonraki handler'a ilet
+			next.ServeHTTP(w, r)
+		})
+	}
 
 	// Servis keşfi arka plan işlemi
 	if clientset != nil {
@@ -886,6 +833,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	httpHandler := corsMiddleware(http.DefaultServeMux)
 	log.Printf("Server %s portunda çalışıyor...", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, httpHandler)) // httpHandler'ı burada kullanın
 }

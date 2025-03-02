@@ -5,6 +5,7 @@ import axios from "axios";
 import { useParams } from "next/navigation";
 import { ServiceCard, Service } from "@/components/ServiceCard";
 import { Line } from "react-chartjs-2";
+import { ChartOptions } from 'chart.js';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -78,23 +79,41 @@ function UptimeChartModal({ serviceId, onClose }: UptimeChartModalProps) {
     ],
   };
 
-  const options = {
-    responsive: true,
-    plugins: {
-      legend: { position: "top" },
-      title: { display: true, text: "Zaman Serisi: Yanıt Süresi" },
+
+// Düzeltilmiş Line chart options tipi
+const options: ChartOptions<'line'> = {
+  responsive: true,
+  plugins: {
+    legend: {
+      position: 'top', // 'top' olarak kesin bir değer
+      labels: {
+        // Gerekirse ek etiket ayarları
+      }
     },
-    scales: {
-      x: {
-        type: "time" as const,
-        time: { unit: "minute" },
-        title: { display: true, text: "Zaman" },
+    title: {
+      display: true,
+      text: 'Uptime Performansı'
+    }
+  },
+  scales: {
+    x: {
+      type: 'time',
+      time: {
+        unit: 'day'
       },
-      y: {
-        title: { display: true, text: "Response Time (ms)" },
-      },
+      title: {
+        display: true,
+        text: 'Tarih'
+      }
     },
-  };
+    y: {
+      title: {
+        display: true,
+        text: 'Yanıt Süresi (ms)'
+      }
+    }
+  }
+};
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">

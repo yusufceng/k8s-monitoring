@@ -29,6 +29,16 @@ ChartJS.register(
 );
 
 // Tip tanımları
+interface ServiceDetails {
+  id: number;
+  name: string;
+  namespace: string;
+  cluster: string;
+  type: string;
+  endpoint?: string;
+  check_interval: number;
+}
+
 export type ChartDetailModalProps = {
   serviceId: number;
   onClose: () => void;
@@ -44,6 +54,12 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   const [history, setHistory] = useState<UptimeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [serviceDetails, setServiceDetails] = useState<ServiceDetails | null>(null);
+  const [metrics, setMetrics] = useState({
+    averageResponseTime: 0,
+    uptimePercentage: 0,
+    successfulRequests: 0
+  });
 
   // Ön tanımlı aralıkları select için
   const predefinedRanges = [
@@ -59,6 +75,17 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   const [customEndDate, setCustomEndDate] = useState("");
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+  // Servis detaylarını getir
+  const fetchServiceDetails = async () => {
+    try {
+      const response = await axios.get(`${apiUrl}/api/v1/services/${serviceId}`);
+      setServiceDetails(response.data.service);
+    } catch (err) {
+      console.error("Service details fetch error", err);
+      setError("Servis detayları alınamadı.");
+    }
+  };
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -93,7 +120,23 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
       }
       
       const response = await axios.get(url);
-      setHistory(response.data.history || []);
+      const historyData = response.data.history || [];
+      setHistory(historyData);
+
+      // Metrikleri hesapla
+      if (historyData.length > 0) {
+        const totalResponseTime = historyData.reduce((sum: number, record: UptimeRecord) => sum + record.responseTime, 0);
+        const avgResponseTime = Math.round(totalResponseTime / historyData.length);
+        const successfulRequests = historyData.filter((record: UptimeRecord) => record.status === 'up').length;
+        const uptimePercentage = Math.round((successfulRequests / historyData.length) * 100);
+
+        setMetrics({
+          averageResponseTime: avgResponseTime,
+          uptimePercentage: uptimePercentage,
+          successfulRequests: successfulRequests
+        });
+      }
+
       setError("");
     } catch (err) {
       console.error("History data fetch error", err);
@@ -104,8 +147,32 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   };
 
   useEffect(() => {
+    fetchServiceDetails();
+  }, [serviceId]);
+
+  useEffect(() => {
     fetchHistory();
   }, [serviceId, selectedRange, customStartDate, customEndDate]);
+
+  const handleExport = async () => {
+    try {
+      const response = await axios.get(
+        `${apiUrl}/api/v1/services/${serviceId}/export?range=${selectedRange}`,
+        { responseType: 'blob' }
+      );
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `service_${serviceId}_export.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error("Export error", err);
+      setError("Veriler dışa aktarılırken hata oluştu.");
+    }
+  };
 
   const data = {
     labels: history.map((record) => new Date(record.timestamp)),
@@ -139,71 +206,123 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full p-8 relative overflow-auto">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-3xl text-gray-600 hover:text-gray-800"
-        >
-          &times;
-        </button>
-        <div className="mb-4">
-          <h2 className="text-2xl font-semibold mb-2">Detaylı Grafik</h2>
-          <div className="mb-4">
-            <label htmlFor="rangeSelect" className="mr-2 font-medium text-gray-700">
-              Zaman Aralığı:
-            </label>
-            <select
-              id="rangeSelect"
-              value={selectedRange}
-              onChange={(e) => setSelectedRange(e.target.value)}
-              className="px-3 py-2 border rounded"
-            >
-              {predefinedRanges.map((range) => (
-                <option key={range.value} value={range.value}>
-                  {range.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {selectedRange === "custom" && (
-            <div className="flex flex-wrap gap-4 mt-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Başlangıç Tarihi</label>
-                <input
-                  type="datetime-local"
-                  value={customStartDate}
-                  onChange={(e) => setCustomStartDate(e.target.value)}
-                  className="px-3 py-2 border rounded"
-                />
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex items-center justify-center min-h-screen px-4 py-6 sm:p-0">
+        <div className="fixed inset-0 bg-slate-900/50 dark:bg-slate-900/70"></div>
+        
+        <div className="relative bg-white dark:bg-slate-800 w-full max-w-4xl rounded-lg shadow-xl">
+          <div className="p-4 sm:p-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 sm:gap-0 mb-4">
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-800 dark:text-slate-100 pr-8">
+                {serviceDetails?.name || 'Yükleniyor...'} - Performans Detayları
+              </h2>
+              <button
+                onClick={onClose}
+                className="absolute right-4 top-4 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mb-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600">
+                  <h3 className="text-base sm:text-lg font-semibold mb-2 text-slate-800 dark:text-slate-100">Servis Bilgileri</h3>
+                  <div className="space-y-1 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+                    <p>Namespace: <span className="font-medium break-all">{serviceDetails?.namespace || '-'}</span></p>
+                    <p>Cluster: <span className="font-medium break-all">{serviceDetails?.cluster || '-'}</span></p>
+                    <p>Type: <span className="font-medium break-all">{serviceDetails?.type || '-'}</span></p>
+                    {serviceDetails?.endpoint && <p>Endpoint: <span className="font-medium break-all">{serviceDetails.endpoint}</span></p>}
+                  </div>
+                </div>
+                
+                <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600">
+                  <h3 className="text-base sm:text-lg font-semibold mb-2 text-slate-800 dark:text-slate-100">Performans Metrikleri</h3>
+                  <div className="space-y-1 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+                    <p>Ortalama Yanıt Süresi: <span className="font-medium">{metrics.averageResponseTime}ms</span></p>
+                    <p>Uptime: <span className="font-medium">{metrics.uptimePercentage}%</span></p>
+                    <p>Son 24 Saat Başarılı İstek: <span className="font-medium">{metrics.successfulRequests}</span></p>
+                  </div>
+                </div>
+                
+                <div className="p-3 sm:p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg border border-slate-200 dark:border-slate-600">
+                  <h3 className="text-base sm:text-lg font-semibold mb-2 text-slate-800 dark:text-slate-100">Zaman Aralığı</h3>
+                  <div className="space-y-2">
+                    <select
+                      value={selectedRange}
+                      onChange={(e) => setSelectedRange(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs sm:text-sm border rounded bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100"
+                    >
+                      {predefinedRanges.map((range) => (
+                        <option key={range.value} value={range.value}>
+                          {range.label}
+                        </option>
+                      ))}
+                    </select>
+                    
+                    {selectedRange === "custom" && (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="block text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                            Başlangıç
+                          </label>
+                          <input
+                            type="datetime-local"
+                            value={customStartDate}
+                            onChange={(e) => setCustomStartDate(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs sm:text-sm border rounded bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                            Bitiş
+                          </label>
+                          <input
+                            type="datetime-local"
+                            value={customEndDate}
+                            onChange={(e) => setCustomEndDate(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs sm:text-sm border rounded bg-white dark:bg-slate-700 border-slate-300 dark:border-slate-600 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Bitiş Tarihi</label>
-                <input
-                  type="datetime-local"
-                  value={customEndDate}
-                  onChange={(e) => setCustomEndDate(e.target.value)}
-                  className="px-3 py-2 border rounded"
-                />
+
+              <div className="h-[300px] sm:h-[400px] bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-600 p-4">
+                {loading ? (
+                  <div className="h-full flex items-center justify-center">
+                    <p className="text-slate-600 dark:text-slate-400">Veriler yükleniyor...</p>
+                  </div>
+                ) : error ? (
+                  <div className="h-full flex items-center justify-center">
+                    <p className="text-red-600 dark:text-red-400">{error}</p>
+                  </div>
+                ) : (
+                  <Line data={data} options={options} />
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row justify-end gap-2 sm:gap-4">
+                <button
+                  onClick={handleExport}
+                  className="w-full sm:w-auto px-4 py-2 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600 transition-colors"
+                >
+                  Verileri Dışa Aktar
+                </button>
+                <button
+                  onClick={onClose}
+                  className="w-full sm:w-auto px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Kapat
+                </button>
               </div>
             </div>
-          )}
-          <div className="flex items-end mt-4">
-            <button
-              onClick={fetchHistory}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-            >
-              Filtrele
-            </button>
           </div>
         </div>
-        {loading ? (
-          <p className="text-center text-gray-600">Veriler yükleniyor...</p>
-        ) : error ? (
-          <p className="text-center text-red-600">{error}</p>
-        ) : (
-          <Line data={data} options={options} />
-        )}
       </div>
     </div>
   );

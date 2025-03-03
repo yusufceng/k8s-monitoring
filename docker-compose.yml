@@ -18,6 +18,12 @@ services:
       - K8S_API_URL=
       - K8S_API_TOKEN=
       - K8S_SKIP_TLS_VERIFY=false
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - "api.tst-vdas.vodafone.local:127.0.0.1"
+      - "dcase-core-api-vdas-crm-dev.apps.tst-vdas.vodafone.local:127.0.0.1"
     restart: unless-stopped
     networks:
       - monitoring-network
@@ -30,7 +36,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_API_URL=http://k8s-monitoring-backend:8080
     depends_on:
       - backend
     restart: unless-stopped

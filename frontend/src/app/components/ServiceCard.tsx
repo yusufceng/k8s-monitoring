@@ -52,7 +52,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDel
     <div className={`p-6 rounded-lg shadow ${getCardBgColor(service.status)} flex flex-col`}>
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-800">{service.name}</h2>
-        {/* Tıklanabilir MiniChart: butona benzer bir yapı ile onChart tetikleniyor */}
+        {/* Tıklanabilir MiniChart: grafik detay modalı tetikleniyor */}
         <div
           onClick={() => onChart(service)}
           className="w-24 h-12 cursor-pointer hover:opacity-80 transition"
@@ -95,16 +95,21 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDel
       <div className="mt-4 flex flex-wrap gap-2">
         <button
           onClick={() => onEdit(service)}
-          className="px-4 py-2 bg-indigo-500 text-white rounded-lg shadow hover:bg-indigo-600 transition-all duration-200"
+          className="px-4 py-2 bg-yellow-500 text-white rounded-lg shadow hover:bg-yellow-600 transition-all duration-200"
         >
           Düzenle
         </button>
         <button
           onClick={() => onDelete(service)}
-          className="px-4 py-2 bg-red-500 text-white rounded-lg shadow hover:bg-red-600 transition-all duration-200"
+          className="px-4 py-2 bg-yellow-700 text-white rounded-lg shadow hover:bg-yellow-800 transition-all duration-200"
         >
           Sil
         </button>
+        <Link href={`/services/${service.id}`}>
+          <a className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition-all duration-200">
+            Detay
+          </a>
+        </Link>
       </div>
     </div>
   );

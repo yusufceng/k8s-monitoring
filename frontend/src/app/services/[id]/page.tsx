@@ -1,378 +1,306 @@
-// frontend/src/app/services/[id]/page.tsx
+//src/app/services/[id]//page.tsx
+
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import DetailModal from '../../components/DetailModal';
+import React, { useState, useEffect } from "react";
+import axios from "axios";
+import { ServiceCard, Service } from "@/components/ServiceCard";
+import Link from "next/link";
+import ChartDetailModal from "@/components/ChartDetailModal";
 
-// Mevcut tipler
-type Service = {
-  id: number;
-  name: string;
-  namespace: string;
-  cluster: string;
-  type: string;
-  endpoint?: string;
-  check_interval?: number;
-};
-
-type UptimeCheck = {
-  id: number;
-  status: string;
-  response_time?: number;
-  error_message?: string;
-  timestamp: string;
-  detailed_info?: string;
-};
-
-// Yeni filtreleme türü
-type FilterOptions = {
-  status?: string;
-  minResponseTime?: number;
-  maxResponseTime?: number;
-  startDate?: string;
-  endDate?: string;
-};
-
-export default function ServiceDetail() {
-  // Mevcut state'ler
-  const params = useParams();
-  const router = useRouter();
-  const [service, setService] = useState<Service | null>(null);
-  const [uptimeChecks, setUptimeChecks] = useState<UptimeCheck[]>([]);
+export default function ServicesPage() {
+  const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [apiUrl, setApiUrl] = useState('');
+  const [error, setError] = useState("");
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
-  // Yeni state'ler
-  const [pagination, setPagination] = useState({
-    currentPage: 1,
-    itemsPerPage: 10,
-    totalItems: 0
-  });
-  const [filters, setFilters] = useState<FilterOptions>({});
-  const [showFilters, setShowFilters] = useState(false);
-  // Modal için state
-  const [selectedDetailInfo, setSelectedDetailInfo] = useState<any>(null);
+  // Arama ve filtre state'leri
+  const [filterText, setFilterText] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
 
-  // API URL'sini yükle
+  // Edit Modal state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedService, setSelectedService] = useState<Service | null>(null);
+
+  // Delete Modal state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [serviceToDelete, setServiceToDelete] = useState<Service | null>(null);
+
+  // Chart Modal state
+  const [showChartModal, setShowChartModal] = useState(false);
+  const [chartService, setChartService] = useState<Service | null>(null);
+
   useEffect(() => {
-    setApiUrl(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080');
+    fetchServices();
   }, []);
 
-  // Servis ve uptime verilerini yükle
-  useEffect(() => {
-    if (!params.id || !apiUrl) return;
-
-    const fetchServiceData = async () => {
-      setLoading(true);
-      try {
-        // Servis detaylarını getir
-        const serviceResponse = await axios.get(`${apiUrl}/api/v1/services/${params.id}`);
-        setService(serviceResponse.data.service);
-        
-        // Uptime kontrol geçmişini getir
-        if (serviceResponse.data.uptime_checks) {
-          setUptimeChecks(serviceResponse.data.uptime_checks);
-          setPagination(prev => ({
-            ...prev, 
-            totalItems: serviceResponse.data.uptime_checks.length
-          }));
-        }
-        
-        setError('');
-      } catch (err) {
-        console.error('Servis verileri yüklenirken hata oluştu:', err);
-        setError('Servis verileri yüklenirken bir hata oluştu.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchServiceData();
-  }, [params.id, apiUrl, filters]);
-
-  // Filtrelenmiş ve sayfalanmış verileri al
-  const getFilteredAndPaginatedChecks = () => {
-    let filteredChecks = [...uptimeChecks];
-
-    // Durum filtrelemesi
-    if (filters.status) {
-      filteredChecks = filteredChecks.filter(check => check.status === filters.status);
+  const fetchServices = async () => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`${apiUrl}/api/v1/services`);
+      const servicesWithUptime = (response.data.services || []).map((s: Service) => ({
+        ...s,
+        uptimePercentage: s.uptimePercentage ?? 0,
+      }));
+      setServices(servicesWithUptime);
+      setError("");
+    } catch (err) {
+      console.error("Servisler yüklenirken hata oluştu:", err);
+      setError("Servis listesi yüklenirken bir hata oluştu.");
+    } finally {
+      setLoading(false);
     }
-
-    // Yanıt süresi filtrelemesi
-    if (filters.minResponseTime !== undefined) {
-      filteredChecks = filteredChecks.filter(
-        check => check.response_time !== undefined && 
-        check.response_time >= filters.minResponseTime!
-      );
-    }
-
-    if (filters.maxResponseTime !== undefined) {
-      filteredChecks = filteredChecks.filter(
-        check => check.response_time !== undefined && 
-        check.response_time <= filters.maxResponseTime!
-      );
-    }
-
-    // Tarih filtrelemesi
-    if (filters.startDate) {
-      filteredChecks = filteredChecks.filter(
-        check => new Date(check.timestamp) >= new Date(filters.startDate!)
-      );
-    }
-
-    if (filters.endDate) {
-      filteredChecks = filteredChecks.filter(
-        check => new Date(check.timestamp) <= new Date(filters.endDate!)
-      );
-    }
-
-    // Sayfalama
-    const startIndex = (pagination.currentPage - 1) * pagination.itemsPerPage;
-    const endIndex = startIndex + pagination.itemsPerPage;
-    
-    return {
-      paginatedChecks: filteredChecks.slice(startIndex, endIndex),
-      totalFilteredItems: filteredChecks.length
-    };
   };
 
-  // Filtreleme formu
-  const renderFilterForm = () => (
-    <div className="bg-white rounded-lg shadow p-4 mb-4">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Durum Filtresi
-          </label>
-          <select
-            className="w-full p-2 border border-gray-300 rounded"
-            value={filters.status || ''}
-            onChange={(e) => setFilters(prev => ({
-              ...prev, 
-              status: e.target.value || undefined
-            }))}
-          >
-            <option value="">Tümü</option>
-            <option value="up">Çalışıyor</option>
-            <option value="down">Hata</option>
-            <option value="warning">Uyarı</option>
-          </select>
-        </div>
+  const filteredServices = services.filter((svc) => {
+    const matchesText = svc.name.toLowerCase().includes(filterText.toLowerCase());
+    const matchesStatus =
+      filterStatus === "all" || (svc.status && svc.status.toLowerCase() === filterStatus);
+    return matchesText && matchesStatus;
+  });
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Min Yanıt Süresi (ms)
-          </label>
-          <input
-            type="number"
-            className="w-full p-2 border border-gray-300 rounded"
-            value={filters.minResponseTime || ''}
-            onChange={(e) => setFilters(prev => ({
-              ...prev, 
-              minResponseTime: e.target.value ? parseInt(e.target.value) : undefined
-            }))}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Maks Yanıt Süresi (ms)
-          </label>
-          <input
-            type="number"
-            className="w-full p-2 border border-gray-300 rounded"
-            value={filters.maxResponseTime || ''}
-            onChange={(e) => setFilters(prev => ({
-              ...prev, 
-              maxResponseTime: e.target.value ? parseInt(e.target.value) : undefined
-            }))}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Başlangıç Tarihi
-          </label>
-          <input
-            type="date"
-            className="w-full p-2 border border-gray-300 rounded"
-            value={filters.startDate || ''}
-            onChange={(e) => setFilters(prev => ({
-              ...prev, 
-              startDate: e.target.value || undefined
-            }))}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Bitiş Tarihi
-          </label>
-          <input
-            type="date"
-            className="w-full p-2 border border-gray-300 rounded"
-            value={filters.endDate || ''}
-            onChange={(e) => setFilters(prev => ({
-              ...prev, 
-              endDate: e.target.value || undefined
-            }))}
-          />
-        </div>
-
-        <div className="flex items-end space-x-2">
-          <button
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-            onClick={() => setFilters({})}
-          >
-            Filtreleri Temizle
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Sayfalama kontrolü
-  const renderPagination = (totalItems: number) => {
-    const totalPages = Math.ceil(totalItems / pagination.itemsPerPage);
-
-    return (
-      <div className="flex justify-between items-center mt-4">
-        <div>
-          Toplam {totalItems} kayıt - Sayfa {pagination.currentPage} / {totalPages}
-        </div>
-        <div className="flex space-x-2">
-          <button
-            className="px-4 py-2 bg-gray-200 rounded disabled:opacity-50"
-            disabled={pagination.currentPage === 1}
-            onClick={() => setPagination(prev => ({ ...prev, currentPage: prev.currentPage - 1 }))}
-          >
-            Önceki
-          </button>
-          <button
-            className="px-4 py-2 bg-gray-200 rounded disabled:opacity-50"
-            disabled={pagination.currentPage === totalPages}
-            onClick={() => setPagination(prev => ({ ...prev, currentPage: prev.currentPage + 1 }))}
-          >
-            Sonraki
-          </button>
-        </div>
-      </div>
-    );
+  // Edit Modal submit handler
+  const updateService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedService) return;
+    try {
+      await axios.put(`${apiUrl}/api/v1/services/${selectedService.id}`, selectedService);
+      setShowEditModal(false);
+      fetchServices();
+    } catch (err) {
+      console.error("Servis güncellenirken hata oluştu:", err);
+      setError("Servis güncellenirken bir hata oluştu.");
+    }
   };
-  {selectedDetailInfo && (
-    <DetailModal 
-      isOpen={true} 
-      onClose={() => setSelectedDetailInfo(null)}
-      details={selectedDetailInfo}
-    />
-  )}
 
-  // Mevcut kodun geri kalanı (loading, error vb.) önceki kodla aynı kalacak
-  // Sadece "return" kısmını aşağıdaki şekilde güncelleyin:
+  // Delete Modal confirm handler
+  const confirmDelete = async () => {
+    if (!serviceToDelete) return;
+    try {
+      await axios.delete(`${apiUrl}/api/v1/services/${serviceToDelete.id}`);
+      setShowDeleteModal(false);
+      setServiceToDelete(null);
+      fetchServices();
+    } catch (err) {
+      console.error("Servis silinirken hata oluştu:", err);
+      setError("Servis silinirken bir hata oluştu.");
+    }
+  };
 
-  const { paginatedChecks, totalFilteredItems } = getFilteredAndPaginatedChecks();
+  const handleEdit = (svc: Service) => {
+    setSelectedService(svc);
+    setShowEditModal(true);
+  };
 
-  // Önceki kodun geri kalanı (loading, error handler, vb.) aynı kalacak
+  const handleDelete = (svc: Service) => {
+    setServiceToDelete(svc);
+    setShowDeleteModal(true);
+  };
+
+  const handleChart = (svc: Service) => {
+    setChartService(svc);
+    setShowChartModal(true);
+  };
 
   return (
-    <div className="p-6">
-      {/* Mevcut kodun başlangıç kısmı (loading, error, service info vb.) aynı kalacak */}
+    <div className="p-8">
+      <h1 className="text-4xl font-bold mb-6">Servisler</h1>
 
-      {/* Son Kontroller */}
-      <div className="bg-white rounded-lg shadow p-6 mt-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">Son Kontroller</h2>
-          <button
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            {showFilters ? 'Filtreleri Gizle' : 'Filtreleri Göster'}
-          </button>
-        </div>
-
-        {showFilters && renderFilterForm()}
-
-        {paginatedChecks.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Tarih/Saat
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Durum
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Yanıt Süresi
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Hata Mesajı
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Detaylar
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {paginatedChecks.map((check, index) => (
-                  <tr key={check.id || index}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {new Date(check.timestamp).toLocaleString()}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                        ${check.status === 'up' ? 'bg-green-100 text-green-800' : 
-                          check.status === 'down' ? 'bg-red-100 text-red-800' : 
-                          check.status === 'warning' ? 'bg-yellow-100 text-yellow-800' : 
-                          'bg-gray-100 text-gray-800'}`}>
-                        {check.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {check.response_time ? `${check.response_time} ms` : 'N/A'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900 break-words max-w-xs">
-                        {check.error_message || '-'}
-                      </div>
-                    </td>
-                    // Tablo içindeki detay sütununda
-                    <td className="px-6 py-4">
-                    {check.detailed_info && (
-                        <button 
-                        className="text-blue-600 hover:text-blue-900"
-                        onClick={() => setSelectedDetailInfo(check.detailed_info)}
-                        >
-                        Detayları Göster
-                        </button>
-                    )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {renderPagination(totalFilteredItems)}
-          </div>
-        ) : (
-          <p className="text-center py-10 text-gray-500">
-            {Object.keys(filters).length > 0 
-              ? 'Filtrelere uyan kontrol kaydı bulunamadı.' 
-              : 'Henüz kontrol kaydı bulunmuyor.'}
-          </p>
-        )}
+      {/* Arama ve filtreleme alanı */}
+      <div className="flex flex-col sm:flex-row gap-4 mb-6">
+        <input
+          type="text"
+          placeholder="Servis adına göre ara..."
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          className="px-4 py-2 border rounded focus:outline-none focus:ring focus:border-blue-300"
+        />
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          className="px-4 py-2 border rounded focus:outline-none focus:ring focus:border-blue-300"
+        >
+          <option value="all">Tümü</option>
+          <option value="up">Up</option>
+          <option value="down">Down</option>
+          <option value="warning">Warning</option>
+          <option value="unknown">Bilinmiyor</option>
+        </select>
       </div>
+
+      {loading ? (
+        <p className="text-center text-gray-600">Servisler yükleniyor...</p>
+      ) : error ? (
+        <p className="text-center text-red-600">{error}</p>
+      ) : filteredServices.length === 0 ? (
+        <p className="text-center text-gray-600">Filtrelemeye uygun servis bulunamadı.</p>
+      ) : (
+        <div className="grid gap-6 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {filteredServices.map((svc) => (
+            <ServiceCard
+              key={svc.id}
+              service={svc}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onChart={handleChart}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-8">
+        <Link href="/groups">
+          <a className="text-blue-600 underline">Grupları Görüntüle</a>
+        </Link>
+      </div>
+
+      {/* Edit Modal */}
+      {showEditModal && selectedService && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold mb-4">Servisi Düzenle</h2>
+            <form onSubmit={updateService}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Servis Adı
+                </label>
+                <input
+                  type="text"
+                  value={selectedService.name}
+                  onChange={(e) =>
+                    setSelectedService({ ...selectedService, name: e.target.value })
+                  }
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Namespace
+                </label>
+                <input
+                  type="text"
+                  value={selectedService.namespace}
+                  onChange={(e) =>
+                    setSelectedService({ ...selectedService, namespace: e.target.value })
+                  }
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Cluster
+                </label>
+                <input
+                  type="text"
+                  value={selectedService.cluster}
+                  onChange={(e) =>
+                    setSelectedService({ ...selectedService, cluster: e.target.value })
+                  }
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Servis Türü
+                </label>
+                <input
+                  type="text"
+                  value={selectedService.type}
+                  onChange={(e) =>
+                    setSelectedService({ ...selectedService, type: e.target.value })
+                  }
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Endpoint
+                </label>
+                <input
+                  type="text"
+                  value={selectedService.endpoint || ""}
+                  onChange={(e) =>
+                    setSelectedService({ ...selectedService, endpoint: e.target.value })
+                  }
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                />
+              </div>
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Kontrol Aralığı (sn)
+                </label>
+                <input
+                  type="number"
+                  value={selectedService.check_interval || 60}
+                  onChange={(e) =>
+                    setSelectedService({
+                      ...selectedService,
+                      check_interval: parseInt(e.target.value),
+                    })
+                  }
+                  min="5"
+                  className="w-full p-2 border rounded focus:outline-none focus:ring"
+                />
+              </div>
+              <div className="flex justify-end space-x-4">
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition"
+                  onClick={() => setShowEditModal(false)}
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition"
+                >
+                  Güncelle
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && serviceToDelete && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-sm w-full p-6">
+            <h2 className="text-xl font-bold mb-4">Servisi Sil</h2>
+            <p className="mb-6">
+              "{serviceToDelete.name}" adlı servisi silmek istediğinizden emin misiniz?
+            </p>
+            <div className="flex justify-end space-x-4">
+              <button
+                type="button"
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition"
+                onClick={() => setShowDeleteModal(false)}
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition"
+                onClick={confirmDelete}
+              >
+                Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chart Detail Modal */}
+      {showChartModal && chartService && (
+        <ChartDetailModal
+          serviceId={chartService.id}
+          onClose={() => setShowChartModal(false)}
+        />
+      )}
     </div>
   );
 }

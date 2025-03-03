@@ -648,6 +648,46 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func mergedNamespacesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// İlk olarak Kubernetes'ten namespace'leri çekelim (varsa)
+	mergedNamespaces := []string{}
+	if clientset != nil {
+		nsList, err := ListNamespaces()
+		if err == nil {
+			mergedNamespaces = append(mergedNamespaces, nsList...)
+		}
+	}
+
+	// Ardından, veritabanındaki servislerden distinct namespace değerlerini ekleyelim
+	rows, err := db.Query("SELECT DISTINCT namespace FROM services")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var ns string
+			if err := rows.Scan(&ns); err == nil {
+				// Eğer daha önceden eklenmemişse ekleyelim
+				exists := false
+				for _, existing := range mergedNamespaces {
+					if existing == ns {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					mergedNamespaces = append(mergedNamespaces, ns)
+				}
+			}
+		}
+	}
+
+	response := map[string]interface{}{
+		"namespaces": mergedNamespaces,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
 // namespacesHandler, Kubernetes namespace'lerini listeler
 func namespacesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -1104,6 +1144,7 @@ func main() {
 	http.HandleFunc("/api/v1/kubernetes/services", k8sServicesHandler)
 	http.HandleFunc("/api/v1/settings", settingsHandler)
 	http.HandleFunc("/api/v1/test-uptime", handlers.HandleUptimeTest)
+	http.HandleFunc("/api/v1/mergedNamespaces", mergedNamespacesHandler)
 
 	// Cluster API endpoint'lerini ekle
 	http.HandleFunc("/api/v1/clusters", clustersHandler)

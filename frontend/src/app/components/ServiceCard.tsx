@@ -16,7 +16,6 @@ export type Service = {
   lastCheck?: string;
   responseTime?: number;
   uptimePercentage?: number;
-  // Grafik için opsiyonel veri, varsa backend'den gelmeli
   chartData?: MiniChartData[];
 };
 
@@ -53,8 +52,11 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({ service, onEdit, onDel
     <div className={`p-6 rounded-lg shadow ${getCardBgColor(service.status)} flex flex-col`}>
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-semibold text-gray-800">{service.name}</h2>
-        {/* Modüler MiniChart bileşeni */}
-        <div className="w-24 h-12">
+        {/* Tıklanabilir MiniChart: butona benzer bir yapı ile onChart tetikleniyor */}
+        <div
+          onClick={() => onChart(service)}
+          className="w-24 h-12 cursor-pointer hover:opacity-80 transition"
+        >
           <MiniChart data={dummyData} />
         </div>
       </div>

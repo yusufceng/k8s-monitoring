@@ -1,4 +1,3 @@
-// src/app/components/ChartDetailModal.tsx
 "use client";
 
 import React, { useState, useEffect } from "react";
@@ -29,15 +28,16 @@ ChartJS.register(
   TimeScale
 );
 
+// Tip tanımları
+export type ChartDetailModalProps = {
+  serviceId: number;
+  onClose: () => void;
+};
+
 export type UptimeRecord = {
   timestamp: string;
   responseTime: number;
   status: string;
-};
-
-type ChartDetailModalProps = {
-  serviceId: number;
-  onClose: () => void;
 };
 
 const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose }) => {
@@ -45,19 +45,52 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Filtreleme için state'ler
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  // Ön tanımlı aralıkları select için
+  const predefinedRanges = [
+    { label: "Son 1 dakika", value: "1m" },
+    { label: "Son 10 dakika", value: "10m" },
+    { label: "Son 1 saat", value: "1h" },
+    { label: "Son 1 gün", value: "1d" },
+    { label: "Özel Aralık", value: "custom" },
+  ];
+
+  const [selectedRange, setSelectedRange] = useState("1h");
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
   const fetchHistory = async () => {
     setLoading(true);
     try {
-      // Filtreler varsa URL'e ekleyelim
       let url = `${apiUrl}/api/v1/uptime-history?serviceId=${serviceId}`;
-      if (startDate) url += `&startDate=${encodeURIComponent(startDate)}`;
-      if (endDate) url += `&endDate=${encodeURIComponent(endDate)}`;
+      
+      if (selectedRange !== "custom") {
+        const now = new Date();
+        let startTime: Date;
+        switch (selectedRange) {
+          case "1m":
+            startTime = new Date(now.getTime() - 1 * 60 * 1000);
+            break;
+          case "10m":
+            startTime = new Date(now.getTime() - 10 * 60 * 1000);
+            break;
+          case "1h":
+            startTime = new Date(now.getTime() - 60 * 60 * 1000);
+            break;
+          case "1d":
+            startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            break;
+          default:
+            startTime = now;
+        }
+        const startParam = encodeURIComponent(startTime.toISOString());
+        const endParam = encodeURIComponent(now.toISOString());
+        url += `&startDate=${startParam}&endDate=${endParam}`;
+      } else {
+        if (customStartDate) url += `&startDate=${encodeURIComponent(customStartDate)}`;
+        if (customEndDate) url += `&endDate=${encodeURIComponent(customEndDate)}`;
+      }
       
       const response = await axios.get(url);
       setHistory(response.data.history || []);
@@ -70,11 +103,9 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
     }
   };
 
-  // İlk veri çekimi ve filtre değiştiğinde yeniden veri çek
   useEffect(() => {
     fetchHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceId, startDate, endDate]);
+  }, [serviceId, selectedRange, customStartDate, customEndDate]);
 
   const data = {
     labels: history.map((record) => new Date(record.timestamp)),
@@ -92,13 +123,13 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
   const options: ChartOptions<"line"> = {
     responsive: true,
     plugins: {
-      legend: { position: "top" as const },
+      legend: { position: "top" },
       title: { display: true, text: "Zaman Serisi: Yanıt Süresi" },
     },
     scales: {
       x: {
-        type: "time" as const,
-        time: { unit: "day" },
+        type: "time",
+        time: { unit: "minute" },
         title: { display: true, text: "Tarih" },
       },
       y: {
@@ -118,33 +149,52 @@ const ChartDetailModal: React.FC<ChartDetailModalProps> = ({ serviceId, onClose 
         </button>
         <div className="mb-4">
           <h2 className="text-2xl font-semibold mb-2">Detaylı Grafik</h2>
-          <div className="flex flex-wrap gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Başlangıç Tarihi</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="px-3 py-2 border rounded"
-              />
+          <div className="mb-4">
+            <label htmlFor="rangeSelect" className="mr-2 font-medium text-gray-700">
+              Zaman Aralığı:
+            </label>
+            <select
+              id="rangeSelect"
+              value={selectedRange}
+              onChange={(e) => setSelectedRange(e.target.value)}
+              className="px-3 py-2 border rounded"
+            >
+              {predefinedRanges.map((range) => (
+                <option key={range.value} value={range.value}>
+                  {range.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedRange === "custom" && (
+            <div className="flex flex-wrap gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Başlangıç Tarihi</label>
+                <input
+                  type="datetime-local"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="px-3 py-2 border rounded"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Bitiş Tarihi</label>
+                <input
+                  type="datetime-local"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="px-3 py-2 border rounded"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Bitiş Tarihi</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="px-3 py-2 border rounded"
-              />
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={fetchHistory}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-              >
-                Filtrele
-              </button>
-            </div>
+          )}
+          <div className="flex items-end mt-4">
+            <button
+              onClick={fetchHistory}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
+            >
+              Filtrele
+            </button>
           </div>
         </div>
         {loading ? (

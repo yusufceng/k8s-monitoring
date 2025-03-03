@@ -868,6 +868,80 @@ func serviceDiscoveryWorker() {
 	}
 }
 
+// uptimeHistoryHandler örneği:
+func uptimeHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	serviceIdStr := r.URL.Query().Get("serviceId")
+	startDateStr := r.URL.Query().Get("startDate")
+	endDateStr := r.URL.Query().Get("endDate")
+
+	serviceId, err := strconv.Atoi(serviceIdStr)
+	if err != nil {
+		http.Error(w, `{"error":"Geçersiz serviceId"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Önce RFC3339 ile parse etmeyi deneyelim
+	startDate, err := time.Parse(time.RFC3339, startDateStr)
+	if err != nil {
+		// Eğer başarısız olursa "2006-01-02T15:04" formatıyla deneyin
+		startDate, err = time.Parse("2006-01-02T15:04", startDateStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz startDate formatı"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	endDate, err := time.Parse(time.RFC3339, endDateStr)
+	if err != nil {
+		endDate, err = time.Parse("2006-01-02T15:04", endDateStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz endDate formatı"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	// endDate'i örneğin 59 saniye ekleyerek tam dakikaya tamamlayabilirsiniz:
+	endDate = endDate.Add(59 * time.Second)
+
+	rows, err := db.Query(`
+        SELECT status, response_time, error_message, timestamp
+        FROM uptime_checks
+        WHERE service_id = ? AND timestamp BETWEEN ? AND ?
+        ORDER BY timestamp ASC
+    `, serviceId, startDate, endDate)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Veriler alınamadı: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	history := []map[string]interface{}{}
+	for rows.Next() {
+		var status string
+		var responseTime int64
+		var errorMessage sql.NullString
+		var timestamp time.Time
+
+		if err := rows.Scan(&status, &responseTime, &errorMessage, &timestamp); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Veri okunamadı: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		record := map[string]interface{}{
+			"timestamp":    timestamp,
+			"responseTime": responseTime,
+			"status":       status,
+		}
+		if errorMessage.Valid {
+			record["errorMessage"] = errorMessage.String
+		}
+		history = append(history, record)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"history": history,
+	})
+}
+
 func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
 	// CORS başlıklarını ekle
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -880,61 +954,142 @@ func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// URL'den son segmenti al
-	pathSegments := strings.Split(r.URL.Path, "/")
-	if len(pathSegments) < 4 {
+	// URL yolunu temizle ve segmentlere ayır
+	trimmedPath := strings.Trim(r.URL.Path, "/")
+	segments := strings.Split(trimmedPath, "/")
+	// Beklenen URL yapıları:
+	// Normal detay: api/v1/services/{id}         -> segments length = 4
+	// Export:         api/v1/services/{id}/export  -> segments length = 5
+	if len(segments) < 4 {
 		http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Son segment ID'dir
-	idStr := pathSegments[len(pathSegments)-1]
-	id, err := strconv.Atoi(idStr)
+	// GET metodu için export mu yapılacak kontrolü
+	if segments[len(segments)-1] == "export" {
+		// Servis ID, export segmentinden bir önceki segmentte olmalı
+		serviceIDStr := segments[len(segments)-2]
+		serviceID, err := strconv.Atoi(serviceIDStr)
+		if err != nil {
+			http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
+			return
+		}
+
+		// "range" parametresini al, varsayılan "1d"
+		exportRange := r.URL.Query().Get("range")
+		if exportRange == "" {
+			exportRange = "1d"
+		}
+
+		// Range değerine karşılık gelen süreyi belirle (örnek olarak)
+		durationMap := map[string]time.Duration{
+			"1h": time.Hour,
+			"1d": 24 * time.Hour,
+			"1w": 7 * 24 * time.Hour,
+			"1m": 30 * 24 * time.Hour,
+			"6m": 180 * 24 * time.Hour,
+			"9m": 270 * 24 * time.Hour,
+			"1y": 365 * 24 * time.Hour,
+		}
+		dur, ok := durationMap[exportRange]
+		if !ok {
+			http.Error(w, `{"error":"Geçersiz range değeri"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Başlangıç zamanını hesapla
+		startTime := time.Now().Add(-dur)
+
+		// Uptime kontrollerini veritabanından çek (timestamp startTime'dan sonra olanlar)
+		rows, err := db.Query(`
+            SELECT status, response_time, error_message, timestamp
+            FROM uptime_checks
+            WHERE service_id = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        `, serviceID, startTime)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Uptime verileri alınamadı: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		// CSV üretimi için hazırlık: header yazdır
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=service_%d_export.csv", serviceID))
+		// CSV başlık
+		fmt.Fprintf(w, "status,response_time,error_message,timestamp\n")
+
+		// Her bir satırı CSV formatında yazdır
+		for rows.Next() {
+			var status string
+			var responseTime int64
+			var errorMessage sql.NullString
+			var timestamp time.Time
+
+			if err := rows.Scan(&status, &responseTime, &errorMessage, &timestamp); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"Veri okunamadı: %v"}`, err), http.StatusInternalServerError)
+				return
+			}
+
+			// Eğer errorMessage boşsa boş string olarak yaz
+			errMsg := ""
+			if errorMessage.Valid {
+				errMsg = errorMessage.String
+			}
+
+			// CSV satırı: verileri virgülle ayırarak yazdırıyoruz
+			fmt.Fprintf(w, "%s,%d,%s,%s\n", status, responseTime, errMsg, timestamp.Format(time.RFC3339))
+		}
+
+		return
+	}
+
+	// Normal GET isteği: servis detaylarını getir
+	// segments beklenen yapıda: ["api", "v1", "services", "{id}"]
+	serviceIDStr := segments[len(segments)-1]
+	id, err := strconv.Atoi(serviceIDStr)
 	if err != nil {
 		http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
 		return
 	}
 
-	switch r.Method {
-	case "GET":
-		// Mevcut GET metodu kodu buraya gelecek
-		var service struct {
-			ID            int
-			Name          string
-			Namespace     string
-			Cluster       string
-			Type          string
-			Endpoint      sql.NullString
-			CheckInterval int
-		}
+	var service struct {
+		ID            int
+		Name          string
+		Namespace     string
+		Cluster       string
+		Type          string
+		Endpoint      sql.NullString
+		CheckInterval int
+	}
 
-		err = db.QueryRow(`
+	err = db.QueryRow(`
             SELECT id, name, namespace, cluster, type, 
                    COALESCE(endpoint, '') as endpoint, 
                    COALESCE(check_interval, 60) as check_interval 
             FROM services 
             WHERE id = ?
         `, id).Scan(
-			&service.ID,
-			&service.Name,
-			&service.Namespace,
-			&service.Cluster,
-			&service.Type,
-			&service.Endpoint,
-			&service.CheckInterval,
-		)
+		&service.ID,
+		&service.Name,
+		&service.Namespace,
+		&service.Cluster,
+		&service.Type,
+		&service.Endpoint,
+		&service.CheckInterval,
+	)
 
-		if err != nil {
-			if err == sql.ErrNoRows {
-				http.Error(w, `{"error":"Servis bulunamadı"}`, http.StatusNotFound)
-			} else {
-				http.Error(w, fmt.Sprintf(`{"error":"Veritabanı hatası: %v"}`, err), http.StatusInternalServerError)
-			}
-			return
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, `{"error":"Servis bulunamadı"}`, http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf(`{"error":"Veritabanı hatası: %v"}`, err), http.StatusInternalServerError)
 		}
+		return
+	}
 
-		// Son uptime kontrol sonuçlarını getir
-		rows, err := db.Query(`
+	// Son uptime kontrol sonuçlarını getir
+	rows, err := db.Query(`
             SELECT status, response_time, error_message, timestamp
             FROM uptime_checks
             WHERE service_id = ?
@@ -942,167 +1097,61 @@ func serviceDetailHandler(w http.ResponseWriter, r *http.Request) {
             LIMIT 10
         `, id)
 
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrolleri getirilemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
-
-		uptimeChecks := []map[string]interface{}{}
-		for rows.Next() {
-			var check struct {
-				Status       string
-				ResponseTime int64
-				ErrorMessage sql.NullString
-				Timestamp    time.Time
-			}
-
-			err := rows.Scan(
-				&check.Status,
-				&check.ResponseTime,
-				&check.ErrorMessage,
-				&check.Timestamp,
-			)
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrol verisi okunamadı: %v"}`, err), http.StatusInternalServerError)
-				return
-			}
-
-			uptimeCheck := map[string]interface{}{
-				"status":        check.Status,
-				"response_time": check.ResponseTime,
-				"timestamp":     check.Timestamp,
-			}
-
-			if check.ErrorMessage.Valid {
-				uptimeCheck["error_message"] = check.ErrorMessage.String
-			}
-
-			uptimeChecks = append(uptimeChecks, uptimeCheck)
-		}
-
-		// Yanıtı hazırla
-		response := map[string]interface{}{
-			"service": map[string]interface{}{
-				"id":             service.ID,
-				"name":           service.Name,
-				"namespace":      service.Namespace,
-				"cluster":        service.Cluster,
-				"type":           service.Type,
-				"check_interval": service.CheckInterval,
-				"endpoint":       service.Endpoint.String,
-			},
-			"uptime_checks": uptimeChecks,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-
-	case "PUT":
-		// Güncellenecek servis bilgisi için struct
-		var updateService struct {
-			Name          string `json:"name"`
-			Namespace     string `json:"namespace"`
-			Cluster       string `json:"cluster"`
-			Type          string `json:"type"`
-			Endpoint      string `json:"endpoint"`
-			CheckInterval int    `json:"check_interval"`
-		}
-
-		// İstek gövdesini decode et
-		if err := json.NewDecoder(r.Body).Decode(&updateService); err != nil {
-			http.Error(w, `{"error":"İstek gövdesi ayrıştırılamadı"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Gerekli alan kontrolü
-		if updateService.Name == "" {
-			http.Error(w, `{"error":"Servis adı gereklidir"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Varsayılan değerler
-		if updateService.Namespace == "" {
-			updateService.Namespace = "default"
-		}
-		if updateService.Cluster == "" {
-			updateService.Cluster = "default"
-		}
-		if updateService.CheckInterval == 0 {
-			updateService.CheckInterval = 60 // Varsayılan 60 saniye
-		}
-
-		// Veritabanında servisi güncelle
-		_, err := db.Exec(`
-            UPDATE services 
-            SET name = ?, namespace = ?, cluster = ?, 
-                type = ?, endpoint = ?, check_interval = ?, 
-                updated_at = CURRENT_TIMESTAMP 
-            WHERE id = ?
-        `, updateService.Name, updateService.Namespace, updateService.Cluster,
-			updateService.Type, updateService.Endpoint, updateService.CheckInterval, id)
-
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Servis güncellenemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Başarılı yanıt hazırla
-		response := map[string]interface{}{
-			"service": map[string]interface{}{
-				"id":             id,
-				"name":           updateService.Name,
-				"namespace":      updateService.Namespace,
-				"cluster":        updateService.Cluster,
-				"type":           updateService.Type,
-				"endpoint":       updateService.Endpoint,
-				"check_interval": updateService.CheckInterval,
-			},
-			"message": "Servis başarıyla güncellendi",
-		}
-
-		// JSON yanıtı gönder
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-
-	case "DELETE":
-		// URL'den servis ID'sini al
-		idStr := r.URL.Path[len("/api/v1/services/"):]
-		id, err := strconv.Atoi(idStr)
-		if err != nil {
-			http.Error(w, `{"error":"Geçersiz servis ID"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Servisi veritabanından sil
-		result, err := db.Exec("DELETE FROM services WHERE id = ?", id)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"Servis silinemedi: %v"}`, err), http.StatusInternalServerError)
-			return
-		}
-
-		// Etkilenen satır sayısını kontrol et
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			http.Error(w, `{"error":"Belirtilen ID ile servis bulunamadı"}`, http.StatusNotFound)
-			return
-		}
-
-		// İlgili uptime kontrollerini de sil
-		db.Exec("DELETE FROM uptime_checks WHERE service_id = ?", id)
-
-		// Başarılı yanıt
-		response := map[string]interface{}{
-			"message": "Servis başarıyla silindi",
-		}
-
-		// JSON yanıtı gönder
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-
-	default:
-		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrolleri getirilemedi: %v"}`, err), http.StatusInternalServerError)
+		return
 	}
+	defer rows.Close()
+
+	uptimeChecks := []map[string]interface{}{}
+	for rows.Next() {
+		var check struct {
+			Status       string
+			ResponseTime int64
+			ErrorMessage sql.NullString
+			Timestamp    time.Time
+		}
+
+		err := rows.Scan(
+			&check.Status,
+			&check.ResponseTime,
+			&check.ErrorMessage,
+			&check.Timestamp,
+		)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"Uptime kontrol verisi okunamadı: %v"}`, err), http.StatusInternalServerError)
+			return
+		}
+
+		uptimeCheck := map[string]interface{}{
+			"status":        check.Status,
+			"response_time": check.ResponseTime,
+			"timestamp":     check.Timestamp,
+		}
+
+		if check.ErrorMessage.Valid {
+			uptimeCheck["error_message"] = check.ErrorMessage.String
+		}
+
+		uptimeChecks = append(uptimeChecks, uptimeCheck)
+	}
+
+	// Yanıtı hazırla
+	response := map[string]interface{}{
+		"service": map[string]interface{}{
+			"id":             service.ID,
+			"name":           service.Name,
+			"namespace":      service.Namespace,
+			"cluster":        service.Cluster,
+			"type":           service.Type,
+			"check_interval": service.CheckInterval,
+			"endpoint":       service.Endpoint.String,
+		},
+		"uptime_checks": uptimeChecks,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func main() {
@@ -1136,6 +1185,7 @@ func main() {
 	}
 
 	// API endpoint'leri
+	http.HandleFunc("/api/v1/uptime-history", uptimeHistoryHandler)
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/api/v1/health", healthHandler)
 	http.HandleFunc("/api/v1/services", servicesHandler)
